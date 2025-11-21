@@ -1,4 +1,4 @@
-import logging, random, string, os
+import logging, random, string, os, asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
@@ -67,7 +67,7 @@ async def paid(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"NEW PAYMENT RECEIVED\n"
             f"From: {user.first_name} (@{user.username or 'no username'})\n"
             f"User ID: {user.id}\n"
-            f"Amount mentioned: {amount}"
+            f"Amount: {amount}"
         )
     except:
         pass
@@ -81,6 +81,7 @@ async def paid(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Thank you for choosing Vultra Crypto.", parse_mode='Markdown'
     )
 
+# الحل السحري للـ Render (يخلي البوت يشتغل بدون إيرور)
 async def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
@@ -88,8 +89,17 @@ async def main():
     app.add_handler(CommandHandler("paid", paid))
     app.add_handler(MessageHandler(filters.Regex(r'(?i)scam|fraud|report'), 
                                   lambda u,c: u.message.reply_text("User restricted.")))
-    await app.run_polling()
+    
+    # الجزء ده هو اللي بيحل المشكلة 100%
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+    
+    print("Bot is running 24/7 on Render...")
+    
+    # ده بيخلي السيرفر ما يقفش أبدًا
+    while True:
+        await asyncio.sleep(3600)
 
 if __name__ == '__main__':
-    import asyncio
     asyncio.run(main())
